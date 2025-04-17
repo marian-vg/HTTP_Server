@@ -53,17 +53,25 @@ int main(int argc, char **argv) {
   
   std::cout << "Waiting for a client to connect...\n";
   
-  int client = accept(server_fd, (struct sockaddr *) &client_addr, (socklen_t *) &client_addr_len);
+  // Create a buffer to store the client's message
+  char buffer[1024] = {0};
 
-  if (client < 0) {
-    std::cerr << "accept failed\n";
-    return 1;
-  }
+  // Store the value returned by accept in a variable
+  auto client = accept(server_fd, (struct sockaddr *) &client_addr, (socklen_t *) &client_addr_len);
   
   std::cout << "Client connected\n";
 
-  std::string message = "HTTP/1.1 200 OK\n";
+  // Read the client's message into the buffer
+  read(client, buffer, sizeof(buffer));
+
+  // Print the client's message
+  std::cout << "Received from client: " << buffer << "\n";
+
+  std::string message = "HTTP/1.1 200 OK\r\n\r\n";
+  
+  // Send the response back to the client with a 200 status code
   send(client, message.c_str(), message.length(), 0);
+
   close(server_fd);
 
   return 0;
