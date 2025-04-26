@@ -2,10 +2,11 @@
 #include <cstdlib>
 #include <string>
 #include <cstring>
-#include <sys/types.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <vector>
+#include <sstream>
+#include <algorithm>
 
 struct ParsedRequest
 {
@@ -39,11 +40,10 @@ ParsedRequest parse_request(const std::string& request)
   size_t pos3 = request.find("\r\n", pos2 + 1);
   parsed_request.version = request.substr(pos2 + 1, pos3 - pos2 - 1); // Extract HTTP version (e.g., HTTP/1.1)
 
-  size_t pos4 = request.find("\r\n", pos3 + 1);
-  parsed_request.headers = request.substr(pos3 + 1, pos4 - pos3 - 1); // Extract headers (e.g., Host, User-Agent, etc...)
+  size_t pos_headers = request.find("\r\n\r\n", pos3);
+  parsed_request.headers = request.substr(pos3 + 2, pos_headers - pos3 - 2); // Extract headers (e.g., Host, User-Agent, etc...)
 
-  size_t pos5 = request.find("\r\n\r\n", pos4 + 1);
-  parsed_request.body = request.substr(pos4 + 1, pos5 - pos4 - 1); // Extract body if present (e.g., data sent in POST request)
+  parsed_request.body = request.substr(pos_headers + 4); // Extract body if present (e.g., data sent in POST request)
 
   return parsed_request;
 }
@@ -56,7 +56,7 @@ std::vector<std::string> split(const std::string &path)
 
   while (start < path.size())
   {
-    size_t next = path.find('/', start); 
+    size_t next = path.find('/', start + 1); 
 
     // Search for all '/' characters in the string
     if (next == std::string::npos)
@@ -73,7 +73,25 @@ std::vector<std::string> split(const std::string &path)
 
     start = next;
   }
+
+  
+
   return parts;
+}
+
+// Function to create a response string
+std::string make_response(int status, const std::string& reason, const std::string& body = "")
+{
+  std::ostringstream oss;
+
+  oss << "HTTP/1.1 " << status << " " << reason << "\r\n"
+  << "Content-Type: text/plain; charset=utf-8\r\n"
+  << "Content-Length: " << body.size() << "\r\n"
+  << "Connection: close\r\n"
+  << "\r\n"
+  << body;
+
+  return oss.str();
 }
 
 int main(int argc, char **argv) {
@@ -97,7 +115,7 @@ int main(int argc, char **argv) {
 
   int server_fd = socket(AF_INET, SOCK_STREAM, 0);
 
-  if (server_fd < 0) {
+  if (server_fd == INVALID_SOCKET) {
     std::cerr << "Failed to create server socket\n";
     WSACleanup();
     return 1;
@@ -110,7 +128,7 @@ int main(int argc, char **argv) {
 
   int reuse = 1;
 
-  if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, (const char*)&reuse, sizeof(reuse)) < 0) {
+  if (setsockopt(server_fd, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, (const char*)&reuse, sizeof(reuse)) == SOCKET_ERROR) {
     std::cerr << "setsockopt failed\n";
     return 1;
   }
@@ -136,7 +154,7 @@ int main(int argc, char **argv) {
 
   int connection_backlog = 5;
 
-  if (listen(server_fd, connection_backlog) != 0) {
+  if (listen(server_fd, connection_backlog) == SOCKET_ERROR) {
     std::cerr << "listen failed\n";
     closesocket(server_fd);
     WSACleanup();
@@ -172,25 +190,24 @@ int main(int argc, char **argv) {
   ParsedRequest parsed_request = parse_request(buffer);
   std::cout << "Received request:\n" << parsed_request << "\n";
 
-  std::string response_ok = "HTTP/1.1 200 OK\r\n";
-  std::string response_not_found = "HTTP/1.1 404 Not Found\r\n";
-
   std::vector<std::string> parsed_path = split(parsed_request.path);
 
   if (parsed_request.path == "/")
   {
-    send(client, response_ok.c_str(), response_ok.size(), 0);
+    std::string response = make_response(200, "OK");
+    send(client, response.c_str(), response.size(), 0);
   }
   else if (parsed_path.size() == 2 && parsed_path[0] == "echo")
   {
     std::string response_body = parsed_path[1];
-    std::string response = response_ok + "Content-Length: " + std::to_string(response_body.size()) + "\r\n\r\n" + response_body;
-    
+    std::string response = make_response(200, "OK", response_body);
+
     send(client, response.c_str(), response.size(), 0);
   }
   else
   {
-    send(client, response_not_found.c_str(), response_not_found.size(), 0);
+    std::string response_notFound = make_response(404, "Not Found");
+    send(client, response_notFound.c_str(), response_notFound.size(), 0);
   }
 
   // [9] Close connections
