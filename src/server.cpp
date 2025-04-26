@@ -143,7 +143,11 @@ int main(int argc, char **argv) {
 
   if (server_fd == INVALID_SOCKET) {
     std::cerr << "Failed to create server socket\n";
-    WSACleanup();
+
+    #ifdef _WIN32
+      WSACleanup();
+    #endif
+
     return 1;
   }
 
@@ -213,7 +217,11 @@ int main(int argc, char **argv) {
   int client_addr_len = sizeof(client_addr);
 
   // Store the value returned by accept in a variable
-  auto client = accept(server_fd, (struct sockaddr *) &client_addr, &client_addr_len);
+  #ifdef _WIN32
+    SOCKET client = accept(server_fd, (struct sockaddr *) &client_addr, &client_addr_len);
+  #else
+    int client = accept(server_fd, (struct sockaddr *) &client_addr, &client_addr_len);
+  #endif
 
   if (client == INVALID_SOCKET) {
     std::cerr << "accept failed\n";
