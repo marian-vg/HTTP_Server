@@ -5,6 +5,76 @@
 #include <sys/types.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <vector>
+
+struct ParsedRequest
+{
+  std::string method;
+  std::string path;
+  std::string version;
+  std::string headers;
+  std::string body;
+};
+
+std::ostream& operator<<(std::ostream& os, const ParsedRequest& req)
+{
+  os << "Method: " << req.method << "\n";
+  os << "Path: " << req.path << "\n";
+  os << "Version: " << req.version << "\n";
+  os << "Headers: " << req.headers << "\n";
+  os << "Body: " << req.body << "\n";
+  return os;
+}
+
+ParsedRequest parse_request(const std::string& request)
+{
+  ParsedRequest parsed_request;
+
+  size_t pos = request.find(" ");
+  parsed_request.method = request.substr(0, pos); // Extract method (e.g., GET, POST, PUT, etc...)
+
+  size_t pos2 = request.find(" ", pos + 1);
+  parsed_request.path = request.substr(pos + 1, pos2 - pos - 1); // Extract path (e.g., /echo/hello)
+
+  size_t pos3 = request.find("\r\n", pos2 + 1);
+  parsed_request.version = request.substr(pos2 + 1, pos3 - pos2 - 1); // Extract HTTP version (e.g., HTTP/1.1)
+
+  size_t pos4 = request.find("\r\n", pos3 + 1);
+  parsed_request.headers = request.substr(pos3 + 1, pos4 - pos3 - 1); // Extract headers (e.g., Host, User-Agent, etc...)
+
+  size_t pos5 = request.find("\r\n\r\n", pos4 + 1);
+  parsed_request.body = request.substr(pos4 + 1, pos5 - pos4 - 1); // Extract body if present (e.g., data sent in POST request)
+
+  return parsed_request;
+}
+
+std::vector<std::string> split(const std::string &path)
+{
+  std::vector<std::string> parts;
+
+  size_t start = 0;
+
+  while (start < path.size())
+  {
+    size_t next = path.find('/', start); 
+
+    // Search for all '/' characters in the string
+    if (next == std::string::npos)
+    {
+      // Check if the remaining part of the string is not empty
+      if (start + 1 < path.size())
+      {
+        parts.push_back(path.substr(start + 1, path.size() - start - 1)); // Extract the last part of the string
+      }
+      break;
+    }
+
+    parts.push_back(path.substr(start + 1, next - start - 1)); // Extract the part of the string between '/' characters
+
+    start = next;
+  }
+  return parts;
+}
 
 int main(int argc, char **argv) {
 
@@ -97,40 +167,30 @@ int main(int argc, char **argv) {
   // Create a buffer to store the client's message
   char buffer[1024] = {0};
 
-  int bytes_received = recv(client, buffer, sizeof(buffer), 0);
+  recv(client, buffer, sizeof(buffer), 0);
 
-  if (bytes_received <= 0) {
-    std::cerr << "Failed to receive data or client disconnected\n";
-    closesocket(client);
-    closesocket(server_fd);
-    WSACleanup();
-    return 1;
-  } else 
+  ParsedRequest parsed_request = parse_request(buffer);
+  std::cout << "Received request:\n" << parsed_request << "\n";
+
+  std::string response_ok = "HTTP/1.1 200 OK\r\n";
+  std::string response_not_found = "HTTP/1.1 404 Not Found\r\n";
+
+  std::vector<std::string> parsed_path = split(parsed_request.path);
+
+  if (parsed_request.path == "/")
   {
-    buffer[bytes_received] = '\0'; // Null-terminate the received data
-
-    // Extract the path parsing the string buffer
-
-    std::string req = buffer;
-
-    auto pos = req.find(' ');
-    auto pos2 = req.find(' ', pos + 1);
-
-    std::string path = req.substr(pos + 1, pos2 - pos - 1);
-
-    // [8] Send the response back
-
-    std::string response;
-
-    if (path == "/") {
-      response = "HTTP/1.1 200 OK\r\n\r\n";
-    }
-    else
-    {
-      response = "HTTP/1.1 404 Not Found\r\n\r\n";
-    }
-
-    send(client, response.c_str(), response.length(), 0);
+    send(client, response_ok.c_str(), response_ok.size(), 0);
+  }
+  else if (parsed_path.size() == 2 && parsed_path[0] == "echo")
+  {
+    std::string response_body = parsed_path[1];
+    std::string response = response_ok + "Content-Length: " + std::to_string(response_body.size()) + "\r\n\r\n" + response_body;
+    
+    send(client, response.c_str(), response.size(), 0);
+  }
+  else
+  {
+    send(client, response_not_found.c_str(), response_not_found.size(), 0);
   }
 
   // [9] Close connections
