@@ -2,11 +2,29 @@
 #include <cstdlib>
 #include <string>
 #include <cstring>
-#include <winsock2.h>
-#include <ws2tcpip.h>
+
+
 #include <vector>
 #include <sstream>
 #include <algorithm>
+
+#ifdef _WIN32
+ #include <winsock2.h>
+ #include <ws2tcpip.h>
+ #define CLOSESOCKET closesocket
+ #define GET_LAST_ERROR WSAGetLastError()
+#else
+ #include <sys/socket.h>
+ #include <netinet/in.h>
+ #include <unistd.h>
+ #include <arpa/inet.h>
+ #include <netdb.h>
+ #include <sys/types.h>
+ #define INVALID_SOCKET -1
+ #define SOCKET_ERROR -1
+ #define GET_LAST_ERROR errno
+ #define CLOSESOCKET close
+#endif
 
 struct ParsedRequest
 {
@@ -94,15 +112,23 @@ std::string make_response(int status, const std::string& reason, const std::stri
   return oss.str();
 }
 
+// -----------------------------------------------------------------------------
+// ---------------------------- Main function ----------------------------------
+// -----------------------------------------------------------------------------
+
 int main(int argc, char **argv) {
 
   // [1] Initialize Winsock
 
-  WSADATA wsaData;
-  if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-    std::cerr << "WSAStartup failed\n";
-    return 1;
-  }
+  #ifdef _WIN32
+
+    WSADATA wsaData;
+    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+      std::cerr << "WSAStartup failed\n";
+      return 1;
+    }
+
+  #endif
 
   // Flush after every std::cout / std::cerr
   std::cout << std::unitbuf;
@@ -128,10 +154,20 @@ int main(int argc, char **argv) {
 
   int reuse = 1;
 
-  if (setsockopt(server_fd, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, (const char*)&reuse, sizeof(reuse)) == SOCKET_ERROR) {
-    std::cerr << "setsockopt failed\n";
-    return 1;
-  }
+  #ifdef _WIN32
+    // On Windows, we need to set the option on the socket itself
+    if(setsockopt(server_fd, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, (const char*)&reuse, sizeof(reuse)) == SOCKET_ERROR) {
+      std::cerr << "setsockopt failed\n";
+      return 1;
+    }
+  #else
+    // On Linux, we need to set the option on the socket itself
+    if(setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, (const char*)&reuse, sizeof(reuse)) == SOCKET_ERROR) {
+      std::cerr << "setsockopt failed\n";
+      return 1;
+    }
+    
+  #endif
 
   // [4] Bind the socket to the port
 
@@ -145,8 +181,12 @@ int main(int argc, char **argv) {
     // The bind function returns SOCKET_ERROR on failure, not -1 like in Linux
 
     std::cerr << "Failed to bind to port 4221\n";
-    closesocket(server_fd);
-    WSACleanup();
+    CLOSESOCKET(server_fd);
+
+    #ifdef _WIN32
+      WSACleanup();
+    #endif
+
     return 1;
   }
 
@@ -156,8 +196,12 @@ int main(int argc, char **argv) {
 
   if (listen(server_fd, connection_backlog) == SOCKET_ERROR) {
     std::cerr << "listen failed\n";
-    closesocket(server_fd);
-    WSACleanup();
+    CLOSESOCKET(server_fd);
+
+    #ifdef _WIN32
+      WSACleanup();
+    #endif
+
     return 1;
   }
 
@@ -173,8 +217,12 @@ int main(int argc, char **argv) {
 
   if (client == INVALID_SOCKET) {
     std::cerr << "accept failed\n";
-    closesocket(server_fd);
-    WSACleanup();
+    CLOSESOCKET(server_fd);
+
+    #ifdef _WIN32
+      WSACleanup();
+    #endif
+
     return 1;
   }
 
@@ -212,9 +260,12 @@ int main(int argc, char **argv) {
 
   // [9] Close connections
   
-  closesocket(client);
-  closesocket(server_fd);
-  WSACleanup();
+  CLOSESOCKET(client);
+  CLOSESOCKET(server_fd);
+
+  #ifdef _WIN32
+      WSACleanup();
+  #endif
 
   return 0;
 }
