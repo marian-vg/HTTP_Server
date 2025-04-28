@@ -274,7 +274,7 @@ int main(int argc, char **argv) {
   else if (parsed_request.headers.find("User-Agent:") != std::string::npos)
   {
     // Extract the user-agent header value
-    size_t agent_start = parsed_request.headers.find("User-Agent:") + strlen("User-Agent:"); // Find the start of the user-agent header
+    size_t agent_start = parsed_request.headers.find("User-Agent:") + strlen("User-Agent: "); // Find the start of the user-agent header
     size_t agent_end = parsed_request.headers.find("\r\n", agent_start); // Find the end of the user-agent header (that is followed by "\r\n")
     std::string user_agent = parsed_request.headers.substr(agent_start, agent_end - agent_start); // Extract the user-agent header value
 
