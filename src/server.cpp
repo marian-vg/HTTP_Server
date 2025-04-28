@@ -2,7 +2,7 @@
 #include <cstdlib>
 #include <string>
 #include <cstring>
-
+#include <thread>
 
 #include <vector>
 #include <sstream>
@@ -13,6 +13,7 @@
  #include <ws2tcpip.h>
  #define CLOSESOCKET closesocket
  #define GET_LAST_ERROR WSAGetLastError()
+ using socket_t = SOCKET;
 #else
  #include <sys/socket.h>
  #include <netinet/in.h>
@@ -24,6 +25,7 @@
  #define SOCKET_ERROR -1
  #define GET_LAST_ERROR errno
  #define CLOSESOCKET close
+ using socket_t = int;
 #endif
 
 /*
@@ -34,6 +36,47 @@ Struct to store the parsed request details
 - headers => Headers of the request (e.g., Host, User-Agent, etc.)
 - body => Body of the request (e.g., data sent in POST request)
 */
+
+// CLASS SOCKET
+class Socket
+{
+  private:
+    socket_t sockfd; // Socket file descriptor
+  public:
+    explicit Socket(socket_t socket) : sockfd(socket) {} // Constructor to initialize the socket
+    ~Socket()
+    {
+      #ifdef _WIN32
+        shutdown(sockfd, SD_BOTH); // Shutdown the socket on Windows
+        closesocket(sockfd); // Close the socket on Windows
+      #else
+        close(sockfd); // Close the socket on Linux
+      #endif
+    }
+
+    socket_t get() const { return sockfd; } // Getter for the socket file descriptor
+
+    Socket(const Socket&) = delete; // Delete copy constructor
+    Socket& operator=(const Socket&) = delete; // Delete copy assignment operator
+    Socket(Socket&& other): sockfd(other.sockfd) { other.sockfd = INVALID_SOCKET; } // Delete move constructor
+    Socket& operator=(Socket&& other) {
+      if (this != &other)
+      {
+        #ifdef _WIN32
+          shutdown(sockfd, SD_BOTH); // Shutdown the socket on Windows
+          closesocket(sockfd); // Close the socket on Windows
+        #else
+          close(sockfd); // Close the socket on Linux
+        #endif
+
+        sockfd = other.sockfd; // Move the socket file descriptor from other to this object
+        other.sockfd = INVALID_SOCKET; // Set other socket to invalid state
+      }
+      return *this; // Return the current object
+    } // Delete move assignment operator
+
+
+};
 
 struct ParsedRequest
 {
@@ -121,6 +164,61 @@ std::string make_response(int status, const std::string& reason, const std::stri
   return oss.str();
 }
 
+void handle_request(Socket client)
+{
+  // Create a buffer to store the client's message
+  char buffer[1024] = {0};
+
+  int bytes_received = recv(client.get(), buffer, sizeof(buffer), 0);
+
+  if (bytes_received <= 0)
+  {
+    std::cerr << "Failed to receive data from client\n";
+    return;
+  }
+
+  ParsedRequest parsed_request = parse_request(buffer);
+  std::cout << "Received request:\n" << parsed_request << "\n";
+
+  std::vector<std::string> parsed_path = split(parsed_request.path);
+
+  if (parsed_request.path == "/")
+  {
+    std::string response = make_response(200, "OK");
+    send(client.get(), response.c_str(), response.size(), 0);
+
+  }
+  // Search for the echo path
+  else if (parsed_path.size() == 2 && parsed_path[0] == "echo")
+  {
+    std::string response_body = parsed_path[1];
+    std::string response = make_response(200, "OK", response_body);
+
+    send(client.get(), response.c_str(), response.size(), 0);
+
+  }
+  // Search for the user-agent header
+  else if (parsed_request.headers.find("User-Agent:") != std::string::npos)
+  {
+    // Extract the user-agent header value
+    size_t agent_start = parsed_request.headers.find("User-Agent:") + strlen("User-Agent: "); // Find the start of the user-agent header
+    size_t agent_end = parsed_request.headers.find("\r\n", agent_start); // Find the end of the user-agent header (that is followed by "\r\n")
+    std::string user_agent = parsed_request.headers.substr(agent_start, agent_end - agent_start); // Extract the user-agent header value
+
+    std::string response = make_response(200, "OK", user_agent); // Create the response with the user-agent header value
+
+    // And send it back
+    send(client.get(), response.c_str(), response.size(), 0);
+
+  }
+  else
+  {
+    std::string response_notFound = make_response(404, "Not Found");
+    send(client.get(), response_notFound.c_str(), response_notFound.size(), 0);
+
+  }
+}
+
 // -----------------------------------------------------------------------------
 // ---------------------------- Main function ----------------------------------
 // -----------------------------------------------------------------------------
@@ -148,7 +246,7 @@ int main(int argc, char **argv) {
 
   // [2] Create a socket
 
-  int server_fd = socket(AF_INET, SOCK_STREAM, 0);
+  socket_t server_fd = socket(AF_INET, SOCK_STREAM, 0);
 
   if (server_fd == INVALID_SOCKET) {
     std::cerr << "Failed to create server socket\n";
@@ -222,76 +320,43 @@ int main(int argc, char **argv) {
 
   // [6] Accept incoming connections
 
-  struct sockaddr_in client_addr;
-  int client_addr_len = sizeof(client_addr);
+  while (true)
+  {
+    struct sockaddr_in client_addr;
+    int client_addr_len = sizeof(client_addr);
 
-  // Store the value returned by accept in a variable
-  #ifdef _WIN32
-    SOCKET client = accept(server_fd, (struct sockaddr *) &client_addr, &client_addr_len);
-  #else
-    int client = accept(server_fd, (struct sockaddr *) &client_addr, (socklen_t *)&client_addr_len);
-  #endif
-
-  if (client == INVALID_SOCKET) {
-    std::cerr << "accept failed\n";
-    CLOSESOCKET(server_fd);
-
+    // Store the value returned by accept in a variable
     #ifdef _WIN32
-      WSACleanup();
+      socket_t client = accept(server_fd, (struct sockaddr *) &client_addr, &client_addr_len);
+    #else
+      socket_t client = accept(server_fd, (struct sockaddr *) &client_addr, (socklen_t *)&client_addr_len);
     #endif
 
-    return 1;
+    if (client == INVALID_SOCKET) {
+      std::cerr << "accept failed\n";
+      CLOSESOCKET(server_fd);
+
+      #ifdef _WIN32
+        WSACleanup();
+      #endif
+
+      return 1;
+    }
+
+    // [7] Receive data from the client
+
+    Socket client_socket{client}; // Create a Socket object to manage the client socket
+
+    std::thread client_thread([](Socket sock) { 
+      handle_request(std::move(sock)); }, // Create a thread to handle the request
+      std::move(client_socket) // Move the socket to the thread
+    );
+
+    client_thread.detach(); // Detach the thread to allow it to run independently
   }
 
-  std::cout << "Client connected\n";
-
-  // [7] Receive data from the client
-
-  // Create a buffer to store the client's message
-  char buffer[1024] = {0};
-
-  recv(client, buffer, sizeof(buffer), 0);
-
-  ParsedRequest parsed_request = parse_request(buffer);
-  std::cout << "Received request:\n" << parsed_request << "\n";
-
-  std::vector<std::string> parsed_path = split(parsed_request.path);
-
-  if (parsed_request.path == "/")
-  {
-    std::string response = make_response(200, "OK");
-    send(client, response.c_str(), response.size(), 0);
-  }
-  // Search for the echo path
-  else if (parsed_path.size() == 2 && parsed_path[0] == "echo")
-  {
-    std::string response_body = parsed_path[1];
-    std::string response = make_response(200, "OK", response_body);
-
-    send(client, response.c_str(), response.size(), 0);
-  }
-  // Search for the user-agent header
-  else if (parsed_request.headers.find("User-Agent:") != std::string::npos)
-  {
-    // Extract the user-agent header value
-    size_t agent_start = parsed_request.headers.find("User-Agent:") + strlen("User-Agent: "); // Find the start of the user-agent header
-    size_t agent_end = parsed_request.headers.find("\r\n", agent_start); // Find the end of the user-agent header (that is followed by "\r\n")
-    std::string user_agent = parsed_request.headers.substr(agent_start, agent_end - agent_start); // Extract the user-agent header value
-
-    std::string response = make_response(200, "OK", user_agent); // Create the response with the user-agent header value
-
-    // And send it back
-    send(client, response.c_str(), response.size(), 0);
-  }
-  else
-  {
-    std::string response_notFound = make_response(404, "Not Found");
-    send(client, response_notFound.c_str(), response_notFound.size(), 0);
-  }
-
-  // [9] Close connections
+  // [8] Close connections
   
-  CLOSESOCKET(client);
   CLOSESOCKET(server_fd);
 
   #ifdef _WIN32
