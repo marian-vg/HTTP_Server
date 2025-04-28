@@ -26,6 +26,15 @@
  #define CLOSESOCKET close
 #endif
 
+/*
+Struct to store the parsed request details
+- method => HTTP method (GET, POST, etc.)
+- path => Path of the request (e.g., /echo/hello)
+- version => HTTP version (e.g., HTTP/1.1)
+- headers => Headers of the request (e.g., Host, User-Agent, etc.)
+- body => Body of the request (e.g., data sent in POST request)
+*/
+
 struct ParsedRequest
 {
   std::string method;
@@ -253,11 +262,25 @@ int main(int argc, char **argv) {
     std::string response = make_response(200, "OK");
     send(client, response.c_str(), response.size(), 0);
   }
+  // Search for the echo path
   else if (parsed_path.size() == 2 && parsed_path[0] == "echo")
   {
     std::string response_body = parsed_path[1];
     std::string response = make_response(200, "OK", response_body);
 
+    send(client, response.c_str(), response.size(), 0);
+  }
+  // Search for the user-agent header
+  else if (parsed_request.headers.find("User-Agent:") != std::string::npos)
+  {
+    // Extract the user-agent header value
+    size_t agent_start = parsed_request.headers.find("User-Agent:") + strlen("User-Agent:"); // Find the start of the user-agent header
+    size_t agent_end = parsed_request.headers.find("\r\n", agent_start); // Find the end of the user-agent header (that is followed by "\r\n")
+    std::string user_agent = parsed_request.headers.substr(agent_start, agent_end - agent_start); // Extract the user-agent header value
+
+    std::string response = make_response(200, "OK", user_agent); // Create the response with the user-agent header value
+
+    // And send it back
     send(client, response.c_str(), response.size(), 0);
   }
   else
