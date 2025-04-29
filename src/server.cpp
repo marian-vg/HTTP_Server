@@ -3,10 +3,10 @@
 #include <string>
 #include <cstring>
 #include <thread>
-
 #include <vector>
 #include <sstream>
 #include <algorithm>
+#include <fstream>
 
 #ifdef _WIN32
  #include <winsock2.h>
@@ -150,12 +150,15 @@ std::vector<std::string> split(const std::string &path)
 }
 
 // Function to create a response string
-std::string make_response(int status, const std::string& reason, const std::string& body = "")
+std::string make_response(int status, const std::string& reason, const std::string& body = "", const std::string& content_type = "text/plain")
 {
   std::ostringstream oss;
 
+  // => default: text/plain
+  // => files: application/octet-stream
+
   oss << "HTTP/1.1 " << status << " " << reason << "\r\n"
-  << "Content-Type: text/plain\r\n"
+  << "Content-Type: " << content_type << "\r\n"
   << "Content-Length: " << body.size() << "\r\n"
   << "Connection: close\r\n"
   << "\r\n"
@@ -164,10 +167,10 @@ std::string make_response(int status, const std::string& reason, const std::stri
   return oss.str();
 }
 
-void handle_request(Socket client)
+void handle_request(Socket client, const std::string& base_directory)
 {
   // Create a buffer to store the client's message
-  char buffer[1024] = {0};
+  char buffer[4096] = {0};
 
   int bytes_received = recv(client.get(), buffer, sizeof(buffer), 0);
 
@@ -197,6 +200,37 @@ void handle_request(Socket client)
     send(client.get(), response.c_str(), response.size(), 0);
 
   }
+  // Search for the file endpoint
+  else if (parsed_path[0] == "files")
+  {
+    std::string filename = parsed_path[1]; // Extract the filename from the path
+    
+    std::ifstream file(base_directory + "/" + filename); // Open the file for reading
+
+    if (!file.is_open())
+    {
+      std::string response_notFound = make_response(404, "Not Found");
+      send(client.get(), response_notFound.c_str(), response_notFound.size(), 0);
+      return;
+    }
+
+    // Get the file size
+    file.seekg(0, std::ios::end);
+    size_t file_size = file.tellg();
+    file.seekg(0, std::ios::beg);
+  
+    // Send the file with the content to the body
+    std::string content;
+    std::ostringstream content_stream;
+
+    content_stream << file.rdbuf(); // Read the file content into the string stream
+    content = content_stream.str(); // Get the content as a string
+
+    std::string response = make_response(200, "OK", content, "application/octet-stream"); // Create the response with the file content
+    send(client.get(), response.c_str(), response.size(), 0); // Send the response to the client
+
+    file.close(); // Close the file
+  }
   // Search for the user-agent header
   else if (parsed_request.headers.find("User-Agent:") != std::string::npos)
   {
@@ -223,7 +257,17 @@ void handle_request(Socket client)
 // ---------------------------- Main function ----------------------------------
 // -----------------------------------------------------------------------------
 
+std::string base_directory = "."; // Base directory for file serving
+
 int main(int argc, char **argv) {
+
+  for(int i = 1; i < argc; ++i)
+  {
+    if(std::string(argv[i]) == "--directory" && i + 1 < argc)
+    {
+      base_directory = argv[i + 1]; // Set the base directory for file serving
+    }
+  }
 
   // [1] Initialize Winsock
 
@@ -348,7 +392,7 @@ int main(int argc, char **argv) {
     Socket client_socket{client}; // Create a Socket object to manage the client socket
 
     std::thread client_thread([](Socket sock) { 
-      handle_request(std::move(sock)); }, // Create a thread to handle the request
+      handle_request(std::move(sock), base_directory); }, // Create a thread to handle the request
       std::move(client_socket) // Move the socket to the thread
     );
 
