@@ -1,2 +1,2 @@
 # http_sv
-https server builded on c++
+http server builded on c++
